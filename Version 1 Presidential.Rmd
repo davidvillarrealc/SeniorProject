@@ -31,6 +31,9 @@ dataHouse$year <- as.numeric(dataHouse$year)
 
 ##Load Economic Data
 fairData <- subset(read.csv("presidential-vote-share-data.csv"), as.numeric(t) > 1930)
+##Load State income data
+incomeData <- read.csv("incomeData.csv")
+incomeData$state <- apply(incomeData, 1, function(x){dataPresident[which(dataPresident$state_fips * 1000 == as.numeric(x["GeoFips"])), "state"][1]})
 
 
 ```
@@ -204,12 +207,38 @@ masterTableCopy$SE <- apply(masterTableCopy, 1, function(x){predict.lm(simpleMod
                                   
 ##Add Rep Estimates 
 
-masterTableCopy$repEstimate<- apply(masterTableCopy, 1, function(x){predict.lm(simpleModel, data.frame(GrowthRate = as.numeric(x["GrowthRate"]), I = as.numeric(x["I"]), Inflation = as.numeric(x["Inflation"]), GoodGrowthQuarters = as.numeric(x["GoodGrowthQuarters"]), DUR2 = as.numeric(x["DUR2"]), repLaggedVoteShare = as.numeric(x["repLaggedVoteShare"])))[[1]][1]})
+masterTableCopy$repEstimate<- apply(masterTableCopy, 1, function(x){predict.lm(simpleModelRepublican, data.frame(GrowthRate = as.numeric(x["GrowthRate"]), I = as.numeric(x["I"]), Inflation = as.numeric(x["Inflation"]), GoodGrowthQuarters = as.numeric(x["GoodGrowthQuarters"]), DUR2 = as.numeric(x["DUR2"]), repLaggedVoteShare = as.numeric(x["repLaggedVoteShare"])))[[1]][1]})
 
-
+##Add Rep Standard Errors
+masterTableCopy$repSE <- apply(masterTableCopy, 1, function(x){predict.lm(simpleModelRepublican, data.frame(GrowthRate = as.numeric(x["GrowthRate"]), I = as.numeric(x["I"]), Inflation = as.numeric(x["Inflation"]), GoodGrowthQuarters = as.numeric(x["GoodGrowthQuarters"]), DUR2 = as.numeric(x["DUR2"]), repLaggedVoteShare = as.numeric(x["repLaggedVoteShare"])), se.fit = TRUE)[[2]][1]})
                                  
- masterTableCopy$MCSimulation <- apply(masterTableCopy, 1, function(x){rnorm(1, as.numeric(x["estimate"]), as.numeric(x["SE"]))})
- masterTableCopy$MCWIN <- ifelse(masterTableCopy$MCSimulation >= )
+ 
+
+
+masterTableCopy$MCSimulation <- apply(masterTableCopy, 1, function(x){rnorm(1, as.numeric(x["estimate"]), as.numeric(x["SE"]))})
+masterTableCopy$MCSimulationREP <- apply(masterTableCopy, 1, function(x){rnorm(1, as.numeric(x["repEstimate"]), as.numeric(x["repSE"]))})
+
+
+#Add prediction Democratic wins
+ masterTableCopy$MCWIN <- ifelse(masterTableCopy$MCSimulation >= masterTableCopy$MCSimulationREP, 1, 0)
+ sum(subset(masterTableCopy, year == 2012)$MCWIN)
+ 
+ 
+ 
+```
+
+
+```{r}
+##Add electoral votes available
+
+masterTableCopy$votesAvailable <- apply(masterTableCopy, 1, function(x){as.numeric(subset(collegeVotesAvailable, year == x["year"] & state == x["state"] )[1,"NumberOfElectors"])})
+
+##Add predicted number of electoral college votes won
+
+masterTableCopy$elecVotesWon <- masterTableCopy$votesAvailable*masterTableCopy$MCWIN
+
+
+sum(subset(masterTableCopy, year == 2000)$elecVotesWon)
 
 ```
 
