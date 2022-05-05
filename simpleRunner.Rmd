@@ -1,0 +1,37 @@
+---
+title: "simpleRunner"
+author: "David Villarreal"
+date: "4/13/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+###First set your working directory to where rData file is stored
+setwd("~/Desktop/Senior/Senior Project")
+##Load All Data
+load("data.rData")
+
+
+#########################################
+##Run Presidential MC Simulation (second argument is year, third is number of simulated (N) elections)
+##Returns a vector of size (N)
+mcSimulationPRESIDENT(masterTableCopy, 2012, 100)
+
+
+
+#########################################
+##Run Senate MC Simulation (second argument is year, third is number of simulated (N) elections)
+##Returns a vector of size (N)
+mcSimulationSENATE(senateElectionSummary, 2012, 100)
+
+#########################################
+##Run House MC Simulation (second argument is year, third is number of simulated (N) elections)
+##Returns a vector of size (N)
+suppressWarnings(mcSimulationHOUSE(electionTable, 2012, 100)) 
+
+
+
+```
+
+
