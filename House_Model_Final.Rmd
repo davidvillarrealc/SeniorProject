@@ -1,0 +1,229 @@
+---
+title: "Version 2 House"
+author: "David Villarreal"
+date: "4/12/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(plyr)
+library(tidyverse)
+library(stargazer)
+
+```
+
+```{r}
+##Load Data
+setwd("~/Desktop/Senior/Thesis Final Submission/Code")
+HouseData = read.csv("1976-2020-house.csv")
+HouseData$incumbentRunning = FALSE
+HouseData$winner = NA
+
+##Add growth, inflation, incumbency data
+growthHouseData <- read.csv("download.csv")
+inflationHouseData <- read.csv("inflationData.csv")
+inflationHouseData$Year <- as.numeric(inflationHouseData$Year)
+inflationHouseData$Inflation <- as.numeric(inflationHouseData$Inflation)
+presidentialIncumbency <- distinct(read.csv("Is.csv"))
+electionTable <- read.csv("table.csv")
+
+
+##Correct Growth Data
+
+correctGrowth <- read.csv("growthData.csv")
+correctGrowth$year <- as.numeric(correctGrowth$year)
+correctGrowth$G <- as.numeric(correctGrowth$G)
+correctGrowth$quarter <- as.numeric(correctGrowth$quarter)
+
+```
+
+```{r}
+##Add wasted votes column
+HouseData$wastedVotes <- 0
+electionTable$efficiencyGap <- 0
+electionTable$laggedEfficiencyGap <- 0
+
+##Sets winner status
+for(i in 1:nrow(HouseData)){
+    newHouseData <- subset(HouseData, year == HouseData[i,1] & state == HouseData[i,2] & district == HouseData[i,8])
+    maxVotes <- 0
+    winnerName <- ""
+    for(j in 1:nrow(newHouseData)){
+      if(newHouseData[j,"candidatevotes"] > maxVotes){
+        maxVotes <- newHouseData[j,"candidatevotes"]
+        winnerName <- newHouseData[j,"candidate"]
+      }
+    }
+    candidateName <- HouseData[i,"candidate"]
+    if(is.na(candidateName) | is.na(winnerName)){
+      HouseData[i,"winner"] <- FALSE
+      HouseData[i,"wastedVotes"] <- HouseData[i,"candidatevotes"]
+    }
+    else if(winnerName == candidateName){
+      HouseData[i,"winner"] <- TRUE
+      HouseData[i,"wastedVotes"] <- as.numeric(HouseData[i,"candidatevotes"]) - (as.numeric(HouseData[i,"totalvotes"]) / 2)
+    }
+    else{
+      HouseData[i,"winner"] <- FALSE
+      HouseData[i,"wastedVotes"] <- HouseData[i,"candidatevotes"]
+    }
+}
+
+
+```
+
+```{r}
+##Adds inflation and incumbency status
+for(k in 1306:nrow(HouseData)){
+  HouseData[k, "Inflation"] <- abs(inflationHouseData[HouseData[k, "year"] - 1923, "Inflation"])
+  if(is.na(HouseData[k,"candidate"])){
+    next
+  }
+  formerWinners <- subset(HouseData, year == HouseData[k,1] - 2 & state == HouseData[k,2] & winner == TRUE)
+  if(empty(formerWinners)){
+    next
+  }
+  for(h in 1:nrow(formerWinners)){
+    if(formerWinners[h,"candidate"] == HouseData[k,"candidate"]){
+      HouseData[k,"incumbentRunning"] <- TRUE
+    }
+  }
+  }
+```
+
+```{r}
+##Creates election table, summarizing every state-year-election
+HouseData$districtFips = HouseData$state_fips*1000 + HouseData$district
+
+for(k in 1306:nrow(HouseData)){
+  election <- subset(HouseData, year == HouseData[k,"year"] & districtFips == HouseData[k, "districtFips"])
+  if(empty(subset(electionTable, Year == HouseData[k,"year"] & State == HouseData[k, "state"]))){
+    election_Year <- HouseData[k,"year"]
+    election_State <- HouseData[k, "state"]
+    election_State_Growth <- subset(growthHouseData, GeoFips == 1000*HouseData[k, "state_fips"])[1,election_Year - 1927]
+    election_Inflation <- inflationHouseData[election_Year - 1923, "Inflation"]
+    allStateElections <- subset(HouseData, year == election_Year & state == election_State)
+    election_numOfDistricts <- max(as.numeric(allStateElections$district))
+    election_demWastedVotes <- sum(subset(allStateElections, party == 'DEMOCRAT')$wastedVotes)
+    election_repWastedVotes <- sum(subset(allStateElections, party == 'REPUBLICAN')$wastedVotes)
+    election_totalVotes <- sum(allStateElections$candidatevotes)
+    election_efficiencyGap <- (election_demWastedVotes - election_repWastedVotes) / election_totalVotes
+    
+    if(empty(subset(electionTable, Year == election_Year - 2))){
+      election_LaggedSeats <- NA
+      election_percentIncumbent <- NA
+      election_republicanIncumbent <- NA
+      election_laggedEfficiencyGap <- NA
+    }
+    else{
+      election_LaggedSeats <- subset(electionTable, Year == election_Year - 2 & State == election_State)[1, "percentDemocratic"]
+      election_laggedEfficiencyGap <- subset(electionTable, Year == election_Year - 2 & State == election_State)[1, "efficiencyGap"]
+      ifelse(is_empty(subset(allStateElections, party == "DEMOCRAT")),election_percentIncumbent <- 0, election_percentIncumbent <- mean(subset(allStateElections, party == "DEMOCRAT")$incumbentRunning) )
+      
+      ifelse(is_empty(subset(allStateElections, party == "REPUBLICAN")),election_republicanIncumbent <- 0, election_republicanIncumbent <- mean(subset(allStateElections, party == "REPUBLICAN")$incumbentRunning))}
+    
+    election_Percent_Democratic <- sum(subset(allStateElections, party == "DEMOCRAT")$winner)/length(unique(allStateElections$district))
+    election_I <- presidentialIncumbency[election_Year - 1788, "I"]
+    newRow <- c(as.numeric(election_Year), election_State, NA, as.numeric(election_State_Growth), as.numeric(election_LaggedSeats), as.numeric(election_percentIncumbent), as.numeric(election_Percent_Democratic), as.numeric(election_I), as.numeric(election_Inflation), as.numeric(election_numOfDistricts), as.numeric(election_republicanIncumbent), as.numeric(election_efficiencyGap), as.numeric(election_laggedEfficiencyGap))
+    electionTable <- rbind(electionTable, newRow)
+  }
+}
+```
+
+
+```{r}
+##Makes everything numeric
+electionTable$republicanIncumbent <- as.numeric(electionTable$republicanIncumbent)
+electionTable$Incumbents <- as.numeric(electionTable$Incumbents)
+electionTable$Year <- as.numeric(electionTable$Year)
+electionTable$laggedSeats <- as.numeric(electionTable$laggedSeats)
+electionTable$percentDemocratic <- as.numeric(electionTable$percentDemocratic)
+electionTable$I <- as.numeric(electionTable$I)
+electionTable$Growth <- as.numeric(electionTable$Growth)
+electionTable$GI <- electionTable$Growth * electionTable$I
+electionTable$Inflation <- as.numeric(electionTable$Inflation)
+electionTable$PI <- electionTable$Inflation * electionTable$I
+electionTable$RedistrictingYear <- ifelse(((electionTable$Year - 1972) %% 10) == 0, TRUE, FALSE)
+electionTable$trueGrowth <- (electionTable$Growth - electionTable$Inflation)*electionTable$I
+electionTable$Inflation <- abs(electionTable$Inflation)
+electionTable$yearsSince1978 <- electionTable$Year - 1978
+electionTable$betaHat <- 0
+electionTable$numOfDistricts <- as.numeric(electionTable$Districts)
+electionTable$laggedEfficiencyGap <- as.numeric(electionTable$laggedEfficiencyGap)
+electionTable$RedistrictingYear <- ifelse(electionTable$RedistrictingYear == TRUE, 0, 1)
+
+##Add midterm status
+electionTable$midterm <- ifelse((2000 - electionTable$Year)%%4 == 0, 1, 0)
+
+```
+
+
+
+```{r}
+##Add correct Growth 
+
+electionTable$correctGrowth <- apply(electionTable, 1, function(x){mean(subset(correctGrowth, year == x["Year"] & quarter != 4)$G)})
+
+```
+
+
+```{r}
+
+##Two different regression models, depending on whether it's midterm or not
+houseModelMIDTERM <- lm(formula = percentDemocratic ~ laggedSeats + laggedSeats:trueGrowth + Incumbents + republicanIncumbent+ trueGrowth:I + Inflation:I + I + laggedEfficiencyGap,  data = subset(electionTable, Year > 1978 & midterm == TRUE))
+summary(houseModelMIDTERM)
+
+houseModelONTERM <- lm(formula = percentDemocratic ~ laggedSeats + laggedSeats:trueGrowth + Incumbents + republicanIncumbent+ trueGrowth:I + Inflation:I + I + laggedEfficiencyGap, data = subset(electionTable, Year > 1978 & midterm == FALSE))
+summary(houseModelONTERM)
+
+
+
+```
+```{r}
+##Add Democratic State Seat share estimates (regression predictions) and standard errors
+currentModel <- houseModel
+
+predictFunction <- function(x){
+  ifelse(x["midterm"] == 1,
+         
+  predict.lm(houseModelMIDTERM, data.frame(laggedSeats = as.numeric(x["laggedSeats"]), Incumbents = as.numeric(x["Incumbents"]), republicanIncumbent = as.numeric(x["republicanIncumbent"]), trueGrowth = as.numeric(x["trueGrowth"]), I = as.numeric(x["I"]), Inflation = as.numeric(x["Inflation"]), laggedEfficiencyGap = as.numeric(x["laggedEfficiencyGap"]))),
+  
+  predict.lm(houseModelONTERM, data.frame(laggedSeats = as.numeric(x["laggedSeats"]), Incumbents = as.numeric(x["Incumbents"]), republicanIncumbent = as.numeric(x["republicanIncumbent"]), trueGrowth = as.numeric(x["trueGrowth"]), I = as.numeric(x["I"]), Inflation = as.numeric(x["Inflation"]), laggedEfficiencyGap = as.numeric(x["laggedEfficiencyGap"]))))}
+
+
+electionTable$demEstimateShare <- apply(electionTable, 1, predictFunction)
+electionTable$demStandardError <- apply(electionTable, 1, function(x){ifelse(x["midterm"] == 1, summary(houseModelMIDTERM)$sigma, summary(houseModelONTERM)$sigma)})
+
+
+
+
+```
+
+```{r}
+##MC Simulation Setup
+
+
+singleRunHOUSE <- function(electionTable, runYear){
+  instanceElectionTable <- subset(electionTable, Year == runYear)
+  instanceElectionTable$MCSimulation <- apply(instanceElectionTable, 1, function(x){
+    districts <- as.numeric(x["numOfDistricts"])
+    estimate <- rnorm(1, as.numeric(x["demEstimateShare"]), as.numeric(x["demStandardError"]))
+    round(as.numeric(estimate) * as.numeric(districts), 0)
+    })
+  return(sum(instanceElectionTable$MCSimulation, na.rm = TRUE))
+}
+
+mcSimulationHOUSE <- function(electionTable, runYear, n){
+  runHOUSE <- vector("double", n)
+  b <- 0
+  while(b < n){
+    runHOUSE[b + 1] <- singleRunHOUSE(electionTable = electionTable, runYear = runYear)
+    b <- b + 1
+  }
+  runHOUSE
+}
+
+
+
+```

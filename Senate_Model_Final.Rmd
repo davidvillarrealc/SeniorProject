@@ -1,0 +1,370 @@
+---
+title: "Version 2 Senate"
+author: "David Villarreal"
+date: "4/4/2022"
+output: html_document
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("~/Desktop/Senior/Thesis Final Submission/Code")
+##Same chunk as Presidential
+
+##Load the packages
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = '/tmp')
+library(plyr)
+library(tidyverse)
+library(tidyr)
+require(broom)
+library(readr)
+library(ggplot2)
+library(stargazer)
+
+##Set Working Directory
+setwd("~/Desktop/Senior/Thesis Final Submission/Code")
+
+## Load the data
+dataPresident <- read.csv("1976-2020-president.csv")
+dataPresident$year <- as.numeric(dataPresident$year)
+
+##To find # of electoral college votes per state
+dataHouse <- read.csv("1976-2020-house.csv")
+dataHouse$district <- as.numeric(dataHouse$district)
+dataHouse$year <- as.numeric(dataHouse$year)
+
+##Load Economic Data
+fairData <- subset(read.csv("presidential-vote-share-data.csv"), as.numeric(t) > 1930)
+##Load State income data
+incomeData <- read.csv("incomeData.csv")
+incomeData$state <- apply(incomeData, 1, function(x){dataPresident[which(dataPresident$state_fips * 1000 == as.numeric(x["GeoFips"])), "state"][1]})
+
+##Load Inflation Data
+inflationData <- read.csv("inflationData.csv")
+
+##Load Senate Data (Not in Presidential Chunk)
+senateData <- read.csv("1976-2020-senate.csv")
+senateData$year <- as.numeric(senateData$year)
+senateData$totalvotes <- as.numeric(senateData$totalvotes)
+senateData$candidatevotes <- as.numeric(senateData$candidatevotes)
+
+##Load growth data <- 
+growthData <- read.csv("growthData.csv")
+growthData$year <- as.numeric(growthData$year)
+growthData$Growth <- as.numeric(growthData$Growth)
+growthData$G <- as.numeric(growthData$G)
+growthData$quarter <- as.numeric(growthData$quarter)
+
+##Create a table with Election terms and parties in power.
+dataPresidentialTerms <- read.csv("presidentsListed.csv")
+dataPresidentialTerms$Year <- as.numeric(dataPresidentialTerms$Year)
+
+##Add power balance data
+
+powerBalanceData <- read.csv("senatePowerData.csv")
+powerBalanceData$year <-  as.numeric(powerBalanceData$year)
+powerBalanceData$DEMOCRATIC <-  as.numeric(powerBalanceData$DEMOCRATIC)
+powerBalanceData$REPUBLICAN <- as.numeric(powerBalanceData$REPUBLICAN)
+powerBalanceData$demSeats <- as.numeric(powerBalanceData$demSeats)
+powerBalanceData$repSeats <- as.numeric(powerBalanceData$repSeats)
+powerBalanceData$demSeatsUp <- as.numeric(powerBalanceData$demSeatsUp)
+
+##Add population data
+
+populationData <- read.csv("apportionment.csv")
+populationData$population <- as.numeric(populationData$Resident.Population)
+populationData$Year <- as.numeric(populationData$Year)
+
+
+##Add expenditure data
+senateExpenditureData <- read.csv("totalSenateExpenditures.csv")
+colnames(senateExpenditureData) <- c("Year", "Total", "Mean", "DEMOCRAT", "REPUBLICAN")
+senateExpenditureData$Year <- as.numeric(senateExpenditureData$Year)
+senateExpenditureData$Total <- as.numeric(senateExpenditureData$Total)
+senateExpenditureData$Mean <- as.numeric(senateExpenditureData$Mean)
+senateExpenditureData$DEMOCRAT <- as.numeric(senateExpenditureData$DEMOCRAT)
+senateExpenditureData$REPUBLICAN <- as.numeric(senateExpenditureData$REPUBLICAN)
+
+
+
+
+```
+
+
+```{r}
+##Add Bernie and Angus King as Democrat
+senateData$party_simplified <- ifelse(senateData$candidate == "BERNIE SANDERS" | senateData$candidate == "BERNARD SANDERS" | senateData$candidate == "ANGUS S. KING, JR." | senateData$candidate == "ANGUS KING", "DEMOCRAT", senateData$party_simplified)
+
+senateData$party_detailed <- ifelse(senateData$candidate == "BERNIE SANDERS" | senateData$candidate == "BERNARD SANDERS" | senateData$candidate == "ANGUS S. KING, JR." | senateData$candidate == "ANGUS KING", "DEMOCRAT", senateData$party_detailed)
+
+
+
+
+##Add if candidate won election
+
+checkIfWon <- function(x){
+  stateElection <- subset(senateData, year == x["year"] & state == x["state"] & special == x["special"])
+  winnerIndex <- which.max(stateElection$candidatevotes)
+  ifelse(stateElection[winnerIndex, "party_simplified"] == x["party_simplified"], 1, 0)
+}
+
+senateData$candidateWin <- apply(senateData, 1, checkIfWon)
+
+##Add incumbency status without special elections
+
+##For each row, check if election 6 years prior was won by them. NA for no data
+
+
+checkIfIncumbentParty <- function(x){
+    if(x["special"] == TRUE){return(0)}
+  previousElection <- subset(senateData, year == as.numeric(x["year"]) - 6 & state == x["state"] & special == FALSE & party_detailed == x["party_detailed"])
+  ifelse(empty(previousElection), 0, previousElection[1, "candidateWin"] == 1)
+}
+
+
+
+checkIfIncumbentCandidate <- function(x){
+  if(x["special"] == TRUE){return(0)}
+  previousElection <- subset(senateData, year == as.numeric(x["year"]) - 6 & state == x["state"] & special == FALSE & party_detailed == x["party_detailed"])
+  ifelse(empty(previousElection), 0, previousElection[1, "candidateWin"] == 1 & previousElection[1, "candidate"] == x["candidate"])
+}
+
+senateData$incumbentParty <- apply(senateData, 1, checkIfIncumbentParty)
+senateData$incumbentCandidate <- apply(senateData, 1, checkIfIncumbentCandidate)
+
+```
+
+
+```{r}
+
+##Create voting election year table for regression
+senateElectionSummary <- expand.grid(unique(senateData$state), seq(1976, 2020, by = 2))
+colnames(senateElectionSummary) <- c("state", "year")
+
+
+
+
+
+senateElectionSummary$hadElection <- apply(senateElectionSummary, 1, function(x){ifelse(nrow(subset(senateData, state == x["state"] & year == x["year"] & special == FALSE)) > 0, 1, 0)})
+
+senateElectionSummary <- subset(senateElectionSummary, hadElection == 1)
+senateElectionSummary <- subset(senateElectionSummary, select = -hadElection)
+senateElectionSummary$special <- FALSE
+specialElections <- unique(subset(senateData, special == TRUE)[c("state", "year")])
+specialElections$special <- TRUE
+senateElectionSummary <- rbind(senateElectionSummary, specialElections)
+
+
+```
+
+```{r}
+
+getVoteShare <- function(x, party){
+  (ifelse(empty(subset(senateData, year == x["year"] & state == x["state"] & party_simplified == party)), 0, 
+    subset(senateData, year == x["year"] & state == x["state"] & party_simplified == party & special == x["special"])[1, "candidatevotes"] / 
+    subset(senateData, year == x["year"] & state == x["state"] & party_simplified == party & special == x["special"])[1, "totalvotes"])[[1]][1])
+}
+
+senateElectionSummary$demVoteShare <- apply(senateElectionSummary, 1, getVoteShare, party = "DEMOCRAT")
+senateElectionSummary$repVoteShare <- apply(senateElectionSummary, 1, getVoteShare, party = "REPUBLICAN")
+
+```
+
+```{r}
+##Add lagged vote share
+
+senateElectionSummary$demLaggedVoteShare <- apply(senateElectionSummary, 1, function(x){
+  ifelse(empty(subset(senateElectionSummary, year == as.numeric(x["year"]) - 2 & state == x["state"])), subset(senateElectionSummary, year == as.numeric(x["year"]) - 4 & state == x["state"])[1, "demVoteShare"], subset(senateElectionSummary, year == as.numeric(x["year"]) - 2 & state == x["state"])[1, "demVoteShare"])
+})
+
+senateElectionSummary$repLaggedVoteShare <- apply(senateElectionSummary, 1, function(x){
+  ifelse(empty(subset(senateElectionSummary, year == as.numeric(x["year"]) - 2 & state == x["state"])), subset(senateElectionSummary, year == as.numeric(x["year"]) - 4 & state == x["state"])[1, "repVoteShare"], subset(senateElectionSummary, year == as.numeric(x["year"]) - 2 & state == x["state"])[1, "repVoteShare"])
+})
+
+
+senateElectionSummary$demLaggedVoteShareSIX <- apply(senateElectionSummary, 1, function(x){
+  ifelse(empty(subset(senateElectionSummary, year == as.numeric(x["year"]) - 6 & state == x["state"])), subset(senateElectionSummary, year == as.numeric(x["year"]) - 4 & state == x["state"])[1, "demVoteShare"], subset(senateElectionSummary, year == as.numeric(x["year"]) - 6 & state == x["state"])[1, "demVoteShare"])
+})
+
+senateElectionSummary$repLaggedVoteShareSIX <- apply(senateElectionSummary, 1, function(x){
+  ifelse(empty(subset(senateElectionSummary, year == as.numeric(x["year"]) - 6 & state == x["state"])), subset(senateElectionSummary, year == as.numeric(x["year"]) - 4 & state == x["state"])[1, "repVoteShare"], subset(senateElectionSummary, year == as.numeric(x["year"]) - 6 & state == x["state"])[1, "repVoteShare"])
+})
+
+
+
+```
+
+
+```{r}
+
+##Add expenditure data
+
+senateElectionSummary$demExpenditureShare <- apply(senateElectionSummary, 1, function(x){
+  a <- subset(senateExpenditureData, Year == x["year"])
+  return(a[1, "DEMOCRAT"]/a[1, "REPUBLICAN"])})
+
+##Add population data
+
+senateElectionSummary$statePopulation <- apply(senateElectionSummary, 1, function(x){subset(populationData, Year == as.numeric(x["year"]) - as.numeric(x["year"])%%10 & Name == x["state"])[1, "population"]})
+
+```
+
+
+```{r}
+##Add growth data
+
+senateElectionSummary$fips <- apply(senateElectionSummary, 1, function(x){1000* as.numeric(subset(senateData, state == x["state"])[1, "state_fips"])})
+
+senateElectionSummary$G <- apply(senateElectionSummary, 1, function(x){subset(growthData, year == x["year"] & quarter == 1)[1,"G"]})
+senateElectionSummary$inflation <- apply(senateElectionSummary, 1, function(x){subset(inflationData, Year == x["year"])[1,"Inflation"]})
+
+
+```
+
+```{r}
+##Add Presidential Data
+senateElectionSummary$I <- apply(senateElectionSummary, 1, function(x){ifelse(subset(dataPresidentialTerms, Year == x["year"])[1,"Party"] == "Republican", -1, 1)})
+
+##Dummy whether or not there is midterm.
+senateElectionSummary$midterm <- ifelse((as.numeric(senateElectionSummary$year) - 2020)%%4, 1, 0)
+
+##Dummy whether democratic incumbent.
+senateElectionSummary$demIncumbentCandidate <- apply(senateElectionSummary, 1, function(x)
+  {ifelse(empty(subset(senateData, year == as.numeric(x["year"]) & state == x["state"] & party_simplified == "DEMOCRAT")), 0, subset(senateData, year == as.numeric(x["year"]) & state == x["state"] & party_simplified == "DEMOCRAT")[1, "incumbentCandidate"][[1]])})
+
+##Dummy whether Republican incumbent.
+senateElectionSummary$repIncumbentCandidate <- apply(senateElectionSummary, 1, function(x)
+  {ifelse(empty(subset(senateData, year == as.numeric(x["year"]) & state == x["state"] & party_simplified == "REPUBLICAN")), 0, subset(senateData, year == as.numeric(x["year"]) & state == x["state"] & party_simplified == "REPUBLICAN")[1, "incumbentCandidate"][[1]])})
+
+
+##Dummy whether democratic seat is contested. 
+senateElectionSummary$demIncumbent <- apply(senateElectionSummary, 1, function(x){
+  ifelse(empty(subset(senateData, year == as.numeric(x["year"]) & state == x["state"] & party_simplified == "DEMOCRAT")), 0, subset(senateData, year == as.numeric(x["year"]) & state == x["state"] & party_simplified == "DEMOCRAT")[1, "incumbentParty"][[1]])})
+
+
+##Dummy whether republican seat is contested. 
+senateElectionSummary$repIncumbent <- apply(senateElectionSummary, 1, function(x){
+  ifelse(empty(subset(senateData, year == as.numeric(x["year"]) & state == x["state"] & party_simplified == "REPUBLICAN")), 0, subset(senateData, year == as.numeric(x["year"]) & state == x["state"] & party_simplified == "REPUBLICAN")[1, "incumbentParty"][[1]])})
+
+##Add power balance data
+
+senateElectionSummary$demSenatePower <- apply(senateElectionSummary, 1, function(x){(subset(powerBalanceData, year == x["year"])[1, "demSeats"]) - 50})
+
+senateElectionSummary$repSenatePower <- apply(senateElectionSummary, 1, function(x){(subset(powerBalanceData, year == x["year"])[1, "repSeats"]) - 50})
+  
+##senateElectionSummary <- senateElectionSummary[complete.cases(senateElectionSummary),]
+
+modelSenateDEM <- lm(demVoteShare ~ demLaggedVoteShare  + demLaggedVoteShareSIX + I:inflation + I:G + I*midterm +  G*demIncumbent + inflation*demIncumbent + repIncumbent + inflation*demIncumbentCandidate + repIncumbentCandidate + demSenatePower, data = senateElectionSummary)
+summary(modelSenateDEM)
+
+modelSenateREP <- lm(repVoteShare ~ repLaggedVoteShare + repLaggedVoteShareSIX + I:inflation + I:G + I*midterm +  G*repIncumbent + inflation*repIncumbent + demIncumbent + inflation*repIncumbentCandidate + demIncumbentCandidate + repSenatePower, data = senateElectionSummary)
+
+summary(modelSenateREP)
+
+
+```
+
+
+```{r}
+##Build Linear Models
+
+##Democrats
+modelSenateDEMonTerm <- lm(demVoteShare ~ demLaggedVoteShare  + demLaggedVoteShareSIX + I:inflation + I:G + log(statePopulation)*demIncumbentCandidate + I +  G*demIncumbent + inflation*demIncumbent + repIncumbent + inflation*demIncumbentCandidate + repIncumbentCandidate + demSenatePower, data = subset(senateElectionSummary, midterm == 0 & year < 2019))
+
+modelSenateDEMmidTerm <- lm(demVoteShare ~ demLaggedVoteShare  + demLaggedVoteShareSIX + I:inflation + I:G + log(statePopulation)*demIncumbentCandidate + I +  G*demIncumbent + inflation*demIncumbent + repIncumbent + inflation*demIncumbentCandidate + repIncumbentCandidate + demSenatePower, data = subset(senateElectionSummary, midterm == 1))
+
+##Republicans
+modelSenateREPonTerm <- lm(repVoteShare ~ repLaggedVoteShare + repLaggedVoteShareSIX + I:inflation + I:G + I +  log(statePopulation)*repIncumbentCandidate + G*repIncumbent + inflation*repIncumbent + demIncumbent + inflation*repIncumbentCandidate + demIncumbentCandidate + repSenatePower, data = subset(senateElectionSummary, midterm == 0))
+
+modelSenateREPmidTerm <- lm(repVoteShare ~ repLaggedVoteShare + repLaggedVoteShareSIX + I:inflation + I:G + I +  log(statePopulation)*repIncumbentCandidate + G*repIncumbent + inflation*repIncumbent + demIncumbent + inflation*repIncumbentCandidate + demIncumbentCandidate + repSenatePower, data = subset(senateElectionSummary, midterm == 1))
+
+
+
+
+```
+
+
+```{r}
+##Add DEM estimates
+
+senateElectionSummary$demEstimate <- apply(senateElectionSummary, 1, function(x){
+  ifelse(x["midterm"] == 0,
+  predict.lm(modelSenateDEMonTerm, data.frame(demLaggedVoteShare = as.numeric(x["demLaggedVoteShare"]), I = as.numeric(x["I"]), midterm = as.numeric(x["midterm"]), G = as.numeric(x["G"]), demIncumbent = as.numeric(x["demIncumbent"]), inflation = as.numeric(x["inflation"]), repIncumbent = as.numeric(x["repIncumbent"]), demIncumbentCandidate = as.numeric(x["demIncumbentCandidate"]), repIncumbentCandidate = as.numeric(x["repIncumbentCandidate"]), demLaggedVoteShareSIX = as.numeric(x["demLaggedVoteShareSIX"]), demSenatePower = as.numeric(x["demSenatePower"]), statePopulation = as.numeric(x["statePopulation"])))[[1]][1], 
+  ##ELSE (midterm)
+  predict.lm(modelSenateDEMmidTerm, data.frame(demLaggedVoteShare = as.numeric(x["demLaggedVoteShare"]), I = as.numeric(x["I"]), midterm = as.numeric(x["midterm"]), G = as.numeric(x["G"]), demIncumbent = as.numeric(x["demIncumbent"]), inflation = as.numeric(x["inflation"]), repIncumbent = as.numeric(x["repIncumbent"]), demIncumbentCandidate = as.numeric(x["demIncumbentCandidate"]), repIncumbentCandidate = as.numeric(x["repIncumbentCandidate"]), demLaggedVoteShareSIX = as.numeric(x["demLaggedVoteShareSIX"]), demSenatePower = as.numeric(x["demSenatePower"]), statePopulation = as.numeric(x["statePopulation"])))[[1]][1]
+  
+  )})
+```
+
+
+```{r}
+##Add REP estimates
+
+senateElectionSummary$repEstimate <- apply(senateElectionSummary, 1, function(x){
+  
+  ifelse(x["midterm"] == 0,
+  predict.lm(modelSenateREPonTerm, data.frame(repLaggedVoteShare = as.numeric(x["repLaggedVoteShare"]), I = as.numeric(x["I"]), midterm = as.numeric(x["midterm"]), G = as.numeric(x["G"]), repIncumbent = as.numeric(x["repIncumbent"]), inflation = as.numeric(x["inflation"]), demIncumbent = as.numeric(x["demIncumbent"]), demIncumbentCandidate = as.numeric(x["demIncumbentCandidate"]), repIncumbentCandidate = as.numeric(x["repIncumbentCandidate"]), repLaggedVoteShareSIX = as.numeric(x["repLaggedVoteShareSIX"]), repSenatePower = as.numeric(x["repSenatePower"]), statePopulation = as.numeric(x["statePopulation"])))[[1]][1],
+  ##ELSE (midterm)
+  predict.lm(modelSenateREPmidTerm, data.frame(repLaggedVoteShare = as.numeric(x["repLaggedVoteShare"]), I = as.numeric(x["I"]), midterm = as.numeric(x["midterm"]), G = as.numeric(x["G"]), repIncumbent = as.numeric(x["repIncumbent"]), inflation = as.numeric(x["inflation"]), demIncumbent = as.numeric(x["demIncumbent"]), demIncumbentCandidate = as.numeric(x["demIncumbentCandidate"]), repIncumbentCandidate = as.numeric(x["repIncumbentCandidate"]), repLaggedVoteShareSIX = as.numeric(x["repLaggedVoteShareSIX"]), repSenatePower = as.numeric(x["repSenatePower"]), statePopulation = as.numeric(x["statePopulation"])))[[1]][1])
+  
+  })
+  
+  
+  
+
+
+
+##Add Residual Standard Error of Regression
+
+senateElectionSummary$demRESIDUALSE <- apply(senateElectionSummary, 1, function(x){ifelse(x["midterm"] == 0,
+    sqrt(deviance(modelSenateDEMonTerm)/df.residual(modelSenateDEMonTerm)),
+    sqrt(deviance(modelSenateDEMmidTerm)/df.residual(modelSenateDEMmidTerm)))})
+    
+    
+senateElectionSummary$repRESIDUALSE <- apply(senateElectionSummary, 1, function(x){ifelse(x["midterm"] == 0,
+    sqrt(deviance(modelSenateREPonTerm)/df.residual(modelSenateREPonTerm)),
+    sqrt(deviance(modelSenateREPmidTerm)/df.residual(modelSenateREPmidTerm)))})
+
+
+```
+
+```{r}
+##MC Simulation setup
+
+singleRunSENATE <- function(senateElectionSummary, runYear){
+  senateElectionSummary$MCSimulation <- apply(senateElectionSummary, 1, function(x){rnorm(1, as.numeric(x["demEstimate"]), as.numeric(x["demRESIDUALSE"]))})
+  senateElectionSummary$MCSimulationREP <- apply(senateElectionSummary, 1, function(x){rnorm(1, as.numeric(x["repEstimate"]),        as.numeric(x["repRESIDUALSE"]))})
+  
+  #Add prediction Democratic wins
+ senateElectionSummary$MCWIN <- ifelse(senateElectionSummary$MCSimulation >= senateElectionSummary$MCSimulationREP, 1, 0)
+
+seatsBefore <- subset(powerBalanceData, year == runYear)[1, "demSeats"]
+demSeatsUp <-subset(powerBalanceData, year == runYear)[1, "demSeatsUp"]
+
+ return(seatsBefore - demSeatsUp + sum(subset(senateElectionSummary, year == runYear)$MCWIN))
+}
+
+mcSimulationSENATE <- function(senateElectionSummary, runYear, n){
+  run <- vector("double", n)
+  a <- 0
+  while(a < n){
+    run[a + 1] <- singleRunSENATE(senateElectionSummary = senateElectionSummary, runYear = runYear)
+    a <- a + 1
+  }
+  run
+}
+
+
+
+
+
+
+
+```
+
+```{r}
+
+
+
+```
+

@@ -1,0 +1,261 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r setup}
+##Load the packages
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = '~/Desktop/Senior/Thesis Final Submission/Code')
+library(plyr)
+library(tidyverse)
+library(tidyr)
+require(broom)
+library(readr)
+library(ggplot2)
+library(stargazer)
+
+##Set Working Directory
+setwd("~/Desktop/Senior/Thesis Final Submission/Code")
+
+## Load the data
+dataPresident <- read.csv("1976-2020-president.csv")
+dataPresident$year <- as.numeric(dataPresident$year)
+
+##To find # of electoral college votes per state
+dataHouse <- read.csv("1976-2020-house.csv")
+dataHouse$district <- as.numeric(dataHouse$district)
+dataHouse$year <- as.numeric(dataHouse$year)
+
+##Load Economic Data
+fairData <- subset(read.csv("presidential-vote-share-data.csv"), as.numeric(t) > 1930)
+##Load State income data
+incomeData <- read.csv("incomeData.csv")
+incomeData$state <- apply(incomeData, 1, function(x){dataPresident[which(dataPresident$state_fips * 1000 == as.numeric(x["GeoFips"])), "state"][1]})
+
+
+```
+
+```{r}
+
+```
+
+
+
+```{r}
+##Create a table with Election terms and parties in power.
+dataPresidentialTerms <- read.csv("presidentsListed.csv")
+dataPresidentialTerms$Year <- as.numeric(dataPresidentialTerms$Year)
+##Selects only election years
+dataEYPresidentialTerms <- as.data.frame(as.numeric(unique(dataPresident$year)))
+colnames(dataEYPresidentialTerms) <- c('Year')
+startingYear <- 1789
+
+presFunction <- function(x, columnNumber, sYear, df){
+  df[as.numeric(x[1])-sYear + 1, columnNumber]
+}
+
+##For loop to fill the table in
+dataEYPresidentialTerms$President <- apply(dataEYPresidentialTerms, 1, presFunction, columnNumber = 2, sYear = startingYear, df=dataPresidentialTerms)
+dataEYPresidentialTerms$Party <- apply(dataEYPresidentialTerms, 1, presFunction, columnNumber = 3, sYear = startingYear, df=dataPresidentialTerms)
+dataEYPresidentialTerms$PartyConsecutiveTerms <- apply(dataEYPresidentialTerms, 1, presFunction, columnNumber = 5, sYear = startingYear, df=dataPresidentialTerms)
+##Adds I (1 if Democrat, -1 if Republican)
+dataEYPresidentialTerms$I <- ifelse(dataEYPresidentialTerms$Party == "Democrat", 1, -1)
+
+```
+
+```{r}
+state_vector <- unique(dataPresident$state)
+
+##Master table with every electionYear-state as row.
+masterElectionTable <- as.data.frame(expand.grid(as.numeric(dataEYPresidentialTerms$Year), state_vector))
+colnames(masterElectionTable) <- c("year", "state")
+
+funcFindWinner <- function(x, year, state, presidentialData){
+  ##For each state election, returns 1 if Democrat won state and 0 otherwise
+  electionYearStateData <- subset(presidentialData, x["year"] == year & x["state"] == state)
+  ifelse(electionYearStateData[which.max(electionYearStateData$candidatevotes), "party_simplified"] == "DEMOCRAT", 1, 0)
+}
+funcFindPresInfo <- function(x, year, state, presidentialData, colValue, party){
+  electionYearStateData <- subset(presidentialData, year == x["year"] & state == x["state"] & party_simplified == party)
+  electionYearStateData[1, colValue]
+}
+
+##Add 1 if state winner and 0 otherwise
+masterElectionTable$democraticStateWin <- apply(masterElectionTable, 1, funcFindWinner, year = masterElectionTable$year, state = masterElectionTable$state, presidentialData = dataPresident)
+
+##Add democratic vote share
+masterElectionTable$year <- as.numeric(masterElectionTable$year)
+masterElectionTable$demVoteShare <- apply(masterElectionTable, 1, funcFindPresInfo, year = masterElectionTable$year, state = masterElectionTable$state, presidentialData = dataPresident, colValue = "candidatevotes", party = "DEMOCRAT") / apply(masterElectionTable, 1, funcFindPresInfo, year = masterElectionTable$year, state = masterElectionTable$state, presidentialData = dataPresident, colValue = "totalvotes", party = "DEMOCRAT")
+
+##Add Republican vote share
+masterElectionTable$repVoteShare <- apply(masterElectionTable, 1, funcFindPresInfo, year = masterElectionTable$year, state = masterElectionTable$state, presidentialData = dataPresident, colValue = "candidatevotes", party = "REPUBLICAN") / apply(masterElectionTable, 1, funcFindPresInfo, year = masterElectionTable$year, state = masterElectionTable$state, presidentialData = dataPresident, colValue = "totalvotes", party = "REPUBLICAN")
+
+
+
+##Add incumbency data
+
+masterElectionTable$I <- apply(masterElectionTable, 1, function(x, dataEYPresidentialTerms){subset(dataEYPresidentialTerms, Year == x["year"])[1,"I"]}, dataEYPresidentialTerms = dataEYPresidentialTerms)
+
+
+masterElectionTable$PartyConsecutiveTerms <- apply(masterElectionTable, 1, function(x, dataEYPresidentialTerms){subset(dataEYPresidentialTerms, Year == x["year"])[1,"PartyConsecutiveTerms"]}, dataEYPresidentialTerms = dataEYPresidentialTerms)
+
+##Add DUR 
+##Multiplying by I to get correct sign (aka -2 consecutive terms means Republicans have had presidency for 2 terms)
+masterElectionTable$DUR <- masterElectionTable$I*(ifelse(masterElectionTable$PartyConsecutiveTerms == 0, 0, 1 + 0.25*(masterElectionTable$PartyConsecutiveTerms - 1)))
+
+
+
+##Add Democrat lagged state vote share
+
+masterElectionTable$laggedVoteShare <- NA
+masterElectionTable$laggedVoteShare <- apply(masterElectionTable, 1, function(x, masterElectionTable){
+  
+  a <- subset(masterElectionTable, year == (as.numeric(x["year"]) - 4) & state == x["state"])
+  ifelse(empty(a), NA, a[1, "demVoteShare"])}, masterElectionTable = masterElectionTable)
+
+##Add Republican lagged state vote share
+
+masterElectionTable$repLaggedVoteShare <- NA
+masterElectionTable$repLaggedVoteShare <- apply(masterElectionTable, 1, function(x, masterElectionTable){
+  
+  a <- subset(masterElectionTable, year == (as.numeric(x["year"]) - 4) & state == x["state"])
+  ifelse(empty(a), NA, a[1, "repVoteShare"])}, masterElectionTable = masterElectionTable)
+
+
+
+
+##Add GDP Growth Rates
+
+masterElectionTable$GrowthRate <- apply(masterElectionTable, 1, function(x, fairData){
+  subset(fairData, t == x["year"])[1, "G"]
+}, fairData = fairData)
+
+##Add Number of Quarters where GDP Growth is greater than 3.2
+
+masterElectionTable$GoodGrowthQuarters <- apply(masterElectionTable, 1, function(x, fairData){
+  as.numeric(subset(fairData, t == x["year"])[1, "Z"])
+}, fairData = fairData)
+
+##Add Inflation Rates
+masterElectionTable$Inflation <- apply(masterElectionTable, 1, function(x, fairData){
+  as.numeric(subset(fairData, t == x["year"])[1, "P"])
+}, fairData = fairData)
+
+##Add DUR2
+masterElectionTable$DUR2 <- apply(masterElectionTable, 1, function(x, fairData){
+  as.numeric(subset(fairData, t == x["year"])[1, "DUR"])
+}, fairData = fairData)
+
+##ADD DPER
+masterElectionTable$DPER <- apply(masterElectionTable, 1, function(x, fairData){
+  as.numeric(subset(fairData, t == x["year"])[1, "DPER"])
+}, fairData = fairData)
+
+
+```
+
+
+
+```{r}
+##Find number of electoral college votes available to each state (changes with every new census)
+
+collegeVotesAvailable <- expand.grid(as.numeric(dataEYPresidentialTerms$Year), state_vector)
+colnames(collegeVotesAvailable) <- c("year", "state")
+collegeVotesAvailable$NumberOfDistricts <- apply(collegeVotesAvailable, 1, function(x){
+  if(x["state"] == "DISTRICT OF COLUMBIA"){return(0)}
+  a <- max(subset(dataHouse, year == x["year"] & state == x["state"])$district)
+  ifelse(a == 0, 1, a)})
+
+collegeVotesAvailable$NumberOfElectors <- as.numeric(collegeVotesAvailable$NumberOfDistricts + 2)
+
+
+##Fix District of Columbia
+collegeVotesAvailable$NumberOfElectors <- apply(collegeVotesAvailable, 1, function(x){
+  ifelse(x["state"] == "DISTRICT OF COLUMBIA", min(subset(collegeVotesAvailable, year == x["year"] & state != "DISTRICT OF COLUMBIA")$NumberOfElectors), x["NumberOfElectors"])})
+
+
+```
+
+```{r}
+
+##Regression
+
+simpleModel <- lm(demVoteShare ~ GrowthRate:I + Inflation:I + GoodGrowthQuarters:I + DUR2 + I + laggedVoteShare + DPER, data = subset(masterElectionTable,  year >1978 & year < 2017))
+
+
+simpleModelRepublican <- lm(repVoteShare ~ GrowthRate:I + Inflation:I + GoodGrowthQuarters:I + DUR2 + I + repLaggedVoteShare + DPER, data = subset(masterElectionTable,  year >1978 & year < 2017))
+
+summary(simpleModel)
+summary(simpleModelRepublican)
+
+
+```
+
+```{r}
+
+
+##Add Dem Estimates
+masterTableCopy <- subset(masterElectionTable, year >1978 & year < 2017)
+masterTableCopy$estimate <- apply(masterTableCopy, 1, function(x){predict.lm(simpleModel, data.frame(GrowthRate = as.numeric(x["GrowthRate"]), I = as.numeric(x["I"]), Inflation = as.numeric(x["Inflation"]), GoodGrowthQuarters = as.numeric(x["GoodGrowthQuarters"]), DUR2 = as.numeric(x["DUR2"]), laggedVoteShare = as.numeric(x["laggedVoteShare"]), DPER = as.numeric(x["DPER"])))[[1]][1]})
+
+
+##Add dem Standard Errors (using sigma, not predict SErrors)
+
+masterTableCopy$SE <- summary(simpleModel)$sigma
+
+                                  
+##Add Rep Estimates 
+
+masterTableCopy$repEstimate<- apply(masterTableCopy, 1, function(x){predict.lm(simpleModelRepublican, data.frame(GrowthRate = as.numeric(x["GrowthRate"]), I = as.numeric(x["I"]), Inflation = as.numeric(x["Inflation"]), GoodGrowthQuarters = as.numeric(x["GoodGrowthQuarters"]), DUR2 = as.numeric(x["DUR2"]), repLaggedVoteShare = as.numeric(x["repLaggedVoteShare"]), DPER = as.numeric(x["DPER"])))[[1]][1]})
+
+##Add Rep Standard Errors
+
+masterTableCopy$repSE <- summary(simpleModel)$sigma
+
+
+##Add electoral votes available
+masterTableCopy$votesAvailable <- apply(masterTableCopy, 1, function(x){as.numeric(subset(collegeVotesAvailable, year == x["year"] & state == x["state"] )[1,"NumberOfElectors"])})
+
+```
+
+
+```{r}
+
+##Simulation Run
+
+singleRunPRESIDENT <- function(masterTableCopy, runYear){
+  masterTableCopy$mcSimulationPRESIDENT <- apply(masterTableCopy, 1, function(x){rnorm(1, as.numeric(x["estimate"]), as.numeric(x["SE"]))})
+  masterTableCopy$mcSimulationPRESIDENTREP <- apply(masterTableCopy, 1, function(x){rnorm(1, as.numeric(x["repEstimate"]),        as.numeric(x["repSE"]))})
+  
+  #Add prediction Democratic wins
+ masterTableCopy$MCWIN <- ifelse(masterTableCopy$mcSimulationPRESIDENT >= masterTableCopy$mcSimulationPRESIDENTREP, 1, 0)
+
+ ##Add predicted number of electoral college votes won
+ masterTableCopy$elecVotesWon <- masterTableCopy$votesAvailable*masterTableCopy$MCWIN
+
+ sum(subset(masterTableCopy, year == runYear)$elecVotesWon)
+}
+
+
+typeof(singleRunPRESIDENT(masterTableCopy = masterTableCopy, 2008))
+
+mcSimulationPRESIDENT <- function(masterTableCopy, runYear, n){
+  run <- vector("double", n)
+  a <- 0
+  while(a < n){
+    run[a + 1] <- singleRunPRESIDENT(masterTableCopy = masterTableCopy, runYear = runYear)
+    a <- a + 1
+  }
+  run
+}
+ 
+
+
+##MC Simulation returns vector with results MC simulation runs, with n runs
+
+
+
+```
